@@ -3,6 +3,20 @@
 #ifndef VULKAN_H
 #define VULKAN_H
 
+struct S_QueueFamilies
+{
+	int graphicsFamily = -1;
+	int presentFamily = -1;
+
+	bool isComplete() { return graphicsFamily >= 0 && presentFamily >= 0; }
+	int family(int index)
+	{
+		if (index == 0) return graphicsFamily;
+		else if (index == 1) return presentFamily;
+		else return -1;
+	}
+};
+
 class Vulkan
 {
 public:
@@ -20,9 +34,12 @@ private:
 	GLFWwindow * m_pWindow = nullptr;
 	VkInstance m_Instance;
 	VkDebugReportCallbackEXT m_DebugCallback;
+	VkSurfaceKHR m_Surface;
+
 	VkPhysicalDevice m_PhysicalDevice = VK_NULL_HANDLE;
 	VkDevice m_LogicalDevice;
 	VkQueue m_GraphicsQueue;
+	VkQueue m_PresentQueue;
 
 
 	void InitWindow(int width, int height, const char *title);
@@ -42,14 +59,17 @@ private:
 	static void DestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackEXT callback, 
 		const VkAllocationCallbacks* pAllocator);
 
+	// Functions for creating the surface.
+	VkSurfaceKHR CreateWindowsSurface(VkInstance instance, GLFWwindow *pWindow);
+
 	// Functions for initializing physical devices.
-	VkPhysicalDevice CreatePhysicalDevice(VkInstance instance);
-	int RankPhysicalDevice(VkPhysicalDevice device);
-	int CheckQueueFamilies(VkPhysicalDevice device); // Choose and sort queue families for the device.
+	VkPhysicalDevice CreatePhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
+	int RankPhysicalDevice(VkPhysicalDevice device, VkSurfaceKHR surface);
+	S_QueueFamilies CheckQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface); // Choose and sort queue families for the device.
 
 	// Functions for creating logical devices.
-	VkDevice CreateLogicalDevice(VkPhysicalDevice physicalDevice);
-	VkQueue GetDeviceQueue(VkPhysicalDevice physicalDevice, VkDevice logicalDevice, int queueIndex);
+	VkDevice CreateLogicalDevice(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface);
+	VkQueue GetDeviceQueue(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkDevice logicalDevice, int familyIndex);
 
 
 

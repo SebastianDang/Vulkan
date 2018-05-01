@@ -33,9 +33,11 @@ void Vulkan::InitVulkan()
 {
 	m_Instance = CreateInstance(Vulkan::Title.c_str(), "No Engine");
 	m_DebugCallback = SetupDebugCallback(m_Instance); // If we want the debug callback.
-	m_PhysicalDevice = CreatePhysicalDevice(m_Instance);
-	m_LogicalDevice = CreateLogicalDevice(m_PhysicalDevice);
-	m_GraphicsQueue = GetDeviceQueue(m_PhysicalDevice, m_LogicalDevice, 0);
+	m_Surface = CreateWindowsSurface(m_Instance, m_pWindow);
+	m_PhysicalDevice = CreatePhysicalDevice(m_Instance, m_Surface);
+	m_LogicalDevice = CreateLogicalDevice(m_PhysicalDevice, m_Surface);
+	m_GraphicsQueue = GetDeviceQueue(m_PhysicalDevice, m_Surface, m_LogicalDevice, 0);
+	m_PresentQueue = GetDeviceQueue(m_PhysicalDevice, m_Surface, m_LogicalDevice, 1);
 }
 
 // We have to define some Vulkan properties and set up the instance.
@@ -58,7 +60,7 @@ VkInstance Vulkan::CreateInstance(const char *appName, const char *engineName)
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	createInfo.pApplicationInfo = &appInfo;
 
-	// For windows, we gather glfw required extensions.
+	// We gather glfw required extensions.
 	uint32_t glfwExtensionCount = 0;
 	const char** glfwExtensions;
 	glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
@@ -190,7 +192,15 @@ void Vulkan::DestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCal
 	if (fn != nullptr) fn(instance, callback, pAllocator);
 }
 
-VkPhysicalDevice Vulkan::CreatePhysicalDevice(VkInstance instance)
+VkSurfaceKHR Vulkan::CreateWindowsSurface(VkInstance instance, GLFWwindow *pWindow)
+{
+	VkSurfaceKHR surface;
+	VkResult result = glfwCreateWindowSurface(instance, pWindow, nullptr, &surface);
+	if (result != VK_SUCCESS) throw std::runtime_error("Failed to create surface.");
+	return surface;
+}
+
+VkPhysicalDevice Vulkan::CreatePhysicalDevice(VkInstance instance, VkSurfaceKHR surface)
 {
 	uint32_t deviceCount = 0;
 	vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr); // We first query the number of devices.
@@ -205,7 +215,7 @@ VkPhysicalDevice Vulkan::CreatePhysicalDevice(VkInstance instance)
 	std::multimap<int, VkPhysicalDevice> physicalDeviceCandidates;
 	for (int i = 0; i < (int)deviceCount; i++)
 	{
-		int rank = RankPhysicalDevice(devices[i]);
+		int rank = RankPhysicalDevice(devices[i], surface);
 		physicalDeviceCandidates.insert(std::make_pair(rank, devices[i]));
 	}
 
@@ -222,7 +232,7 @@ VkPhysicalDevice Vulkan::CreatePhysicalDevice(VkInstance instance)
 // If there are multiple GPUs and we want to use the 'best' one, we rank them here.
 // This can also serve as a check for the physical device.
 // If it doesn't meet any of these requirements of base requirements, returns 0.
-int Vulkan::RankPhysicalDevice(VkPhysicalDevice device)
+int Vulkan::RankPhysicalDevice(VkPhysicalDevice device, VkSurfaceKHR surface)
 {
 	int score = 0; // If it's not suitable, we just return 0.
 
@@ -245,8 +255,8 @@ int Vulkan::RankPhysicalDevice(VkPhysicalDevice device)
 	if (!deviceFeatures.geometryShader) return 0;
 
 	// We check the queue family to ensure that it can handle the operations we need.
-	int familyIndex = CheckQueueFamilies(device);
-	if (familyIndex < 0) return 0; // return 0 if not supported.
+	bool queueComplete = CheckQueueFamilies(device, surface).isComplete();
+	if (!queueComplete) return 0; // return 0 if not supported.
 
 	// Return weighted score, if it meets the general requirements.
 	return score;
@@ -255,8 +265,11 @@ int Vulkan::RankPhysicalDevice(VkPhysicalDevice device)
 // Checks the queue families for our device, then returns the index that supports it.
 // If it doesn't meet requirements, return -1.
 // Extend this to search for specific families, so we have handles for each one.
-int Vulkan::CheckQueueFamilies(VkPhysicalDevice device)
+S_QueueFamilies Vulkan::CheckQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface)
 {
+	// Fill out this struct with a list of the families we need.
+	S_QueueFamilies queueFamilyResults;
+
 	// Query for queue families.
 	uint32_t queueFamilyCount = 0;
 	vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
@@ -272,27 +285,42 @@ int Vulkan::CheckQueueFamilies(VkPhysicalDevice device)
 		bool sparse = queueFamilies[i].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT; // Related to sparse memory.
 		bool protect = queueFamilies[i].queueFlags & VK_QUEUE_PROTECTED_BIT; // Related to protected memory.
 
-		// For now, we only need to satisfy the graphics operations queue family.
-		if (graphics) return i;
-		else if (compute | transfer | sparse | protect) continue;
+		// We make sure it supports the graphics operations queue family.
+		if (graphics) queueFamilyResults.graphicsFamily = i;
+		else if (compute | transfer | sparse | protect) {} // Change this if we need it later.
+		
+		// We check if it has presentation support for the surface.
+		VkBool32 presentation = false;
+		vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentation);
+		if (presentation) queueFamilyResults.presentFamily = i;
+
+		// If it's done filling out the queuefamily, we break.
+		if (queueFamilyResults.isComplete()) break;
 	}
 
-	return -1;
+	return queueFamilyResults;
 }
 
-VkDevice Vulkan::CreateLogicalDevice(VkPhysicalDevice physicalDevice)
+VkDevice Vulkan::CreateLogicalDevice(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface)
 {
 	// We check the queue family again of the chosen device, to get the index.
-	int graphicsFamily = CheckQueueFamilies(physicalDevice);
+	S_QueueFamilies queueFamilyResults = CheckQueueFamilies(physicalDevice, surface);
 
-	// Setup the queue first.
-	VkDeviceQueueCreateInfo queueCreateInfo = {};
-	queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-	queueCreateInfo.queueFamilyIndex = graphicsFamily;
-	queueCreateInfo.queueCount = 1; // Right now, we're just using a single queue family.
+	// Setup the queues first.
+	std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+	std::set<int> uniqueQueueFamilies = { queueFamilyResults.graphicsFamily, queueFamilyResults.presentFamily };
 
+	// For each queue, we fill in the createinfos.
 	float queuePriority = 1.0f; // Value from 0.0 - 1.0. Required!
-	queueCreateInfo.pQueuePriorities = &queuePriority;
+	for (int queueFamily : uniqueQueueFamilies)
+	{
+		VkDeviceQueueCreateInfo queueCreateInfo = {};
+		queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+		queueCreateInfo.queueFamilyIndex = queueFamily; // Queue family index.
+		queueCreateInfo.queueCount = 1; // Right now, we're using 1 queue per family.
+		queueCreateInfo.pQueuePriorities = &queuePriority;
+		queueCreateInfos.push_back(queueCreateInfo);
+	}
 
 	// Setup the logical device features.
 	VkPhysicalDeviceFeatures deviceFeatures = {}; // We'll add features here later.
@@ -300,8 +328,8 @@ VkDevice Vulkan::CreateLogicalDevice(VkPhysicalDevice physicalDevice)
 	// Fill in the device create info.
 	VkDeviceCreateInfo createInfo = {};
 	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-	createInfo.pQueueCreateInfos = &queueCreateInfo; // Point to the queue create info.
-	createInfo.queueCreateInfoCount = 1; // Right now we only have a single queue create info.
+	createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()); 
+	createInfo.pQueueCreateInfos = queueCreateInfos.data(); // Point to the queue create info.
 	createInfo.pEnabledFeatures = &deviceFeatures; // Link the device features we specify above.
 
 	// We'll add in extensions later.
@@ -323,15 +351,16 @@ VkDevice Vulkan::CreateLogicalDevice(VkPhysicalDevice physicalDevice)
 	return logicalDevice;
 }
 
-VkQueue Vulkan::GetDeviceQueue(VkPhysicalDevice physicalDevice, VkDevice logicalDevice, int queueIndex)
+VkQueue Vulkan::GetDeviceQueue(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkDevice logicalDevice, int familyIndex)
 {
 	// We check the queue family again of the chosen device, to get the index.
-	int graphicsFamily = CheckQueueFamilies(physicalDevice);
-
+	S_QueueFamilies queueFamily = CheckQueueFamilies(physicalDevice, surface);
+	int family = queueFamily.family(familyIndex);
+	
 	// Get the device queue reference from the logical device.
 	// Since queues are automatically created with the logical device, we can directly grab it.
 	VkQueue deviceQueue;
-	vkGetDeviceQueue(logicalDevice, graphicsFamily, queueIndex, &deviceQueue);
+	vkGetDeviceQueue(logicalDevice, family, 0, &deviceQueue); // Since we only added one queue per family, we just take the first.
 	return deviceQueue;
 }
 
@@ -350,6 +379,7 @@ void Vulkan::Cleanup()
 	if ((int)Vulkan::ValidationLayers.size() > 0) 
 		Vulkan::DestroyDebugReportCallbackEXT(m_Instance, m_DebugCallback, nullptr);
 
+	vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr); // Destroyed BEFORE instance.
 	vkDestroyInstance(m_Instance, nullptr); // TODO: Fill in custom allocator callback later.
 
 	glfwDestroyWindow(m_pWindow);
