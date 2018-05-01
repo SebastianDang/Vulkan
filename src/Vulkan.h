@@ -29,12 +29,12 @@ private:
 	void InitVulkan();
 
 	// Functions for setting up the instance and verifying extensions and layers.
-	void CreateInstance(const char *appName, const char *engineName);
+	VkInstance CreateInstance(const char *appName, const char *engineName);
 	bool CheckGLFWExtensionSupport(const char ** glfwExtensions, int glfwExtensionCount);
 	bool CheckValidationLayerSupport(std::vector<const char*> validationLayers);
 
 	// Functions for setting up the debug callback.
-	void SetupDebugCallback();
+	VkDebugReportCallbackEXT SetupDebugCallback(VkInstance instance);
 	static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objType,
 		uint64_t obj, size_t location, int32_t code, const char* layerPrefix, const char* msg, void* userData);
 	static VkResult CreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, 
@@ -43,12 +43,15 @@ private:
 		const VkAllocationCallbacks* pAllocator);
 
 	// Functions for initializing physical devices.
-	void CreatePhysicalDevice();
+	VkPhysicalDevice CreatePhysicalDevice(VkInstance instance);
 	int RankPhysicalDevice(VkPhysicalDevice device);
 	int CheckQueueFamilies(VkPhysicalDevice device); // Choose and sort queue families for the device.
 
 	// Functions for creating logical devices.
-	void CreateLogicalDevice();
+	VkDevice CreateLogicalDevice(VkPhysicalDevice physicalDevice);
+	VkQueue GetDeviceQueue(VkPhysicalDevice physicalDevice, VkDevice logicalDevice, int queueIndex);
+
+
 
 	void MainLoop();
 	void Cleanup();

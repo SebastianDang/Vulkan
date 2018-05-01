@@ -31,16 +31,17 @@ void Vulkan::InitWindow(int width, int height, const char *title)
 // Once that's created, we grab any additional extensions and setup callbacks here.
 void Vulkan::InitVulkan()
 {
-	CreateInstance(Vulkan::Title.c_str(), "No Engine");
-	SetupDebugCallback(); // If we want the debug callback.
-	CreatePhysicalDevice();
-	CreateLogicalDevice();
+	m_Instance = CreateInstance(Vulkan::Title.c_str(), "No Engine");
+	m_DebugCallback = SetupDebugCallback(m_Instance); // If we want the debug callback.
+	m_PhysicalDevice = CreatePhysicalDevice(m_Instance);
+	m_LogicalDevice = CreateLogicalDevice(m_PhysicalDevice);
+	m_GraphicsQueue = GetDeviceQueue(m_PhysicalDevice, m_LogicalDevice, 0);
 }
 
 // We have to define some Vulkan properties and set up the instance.
 // Any validation layers and extensions need to be added, then
 // verified here.
-void Vulkan::CreateInstance(const char *appName, const char *engineName)
+VkInstance Vulkan::CreateInstance(const char *appName, const char *engineName)
 {
 	// Define the application layer. 
 	VkApplicationInfo appInfo = {};
@@ -83,9 +84,11 @@ void Vulkan::CreateInstance(const char *appName, const char *engineName)
 	createInfo.enabledLayerCount = static_cast<uint32_t>(Vulkan::ValidationLayers.size());
 	createInfo.ppEnabledLayerNames = ((int)Vulkan::ValidationLayers.size() > 0) ? Vulkan::ValidationLayers.data() : nullptr;
 
-	// Create the actual instance now. Store it as m_Instance.
-	VkResult result = vkCreateInstance(&createInfo, nullptr, &m_Instance); // TODO: Fill in custom allocator callback later.
+	// Create the actual instance now.
+	VkInstance instance;
+	VkResult result = vkCreateInstance(&createInfo, nullptr, &instance); // TODO: Fill in custom allocator callback later.
 	if (result != VK_SUCCESS) throw std::runtime_error("Failed to create instance.");
+	return instance;
 }
 
 bool Vulkan::CheckGLFWExtensionSupport(const char ** glfwExtensions, int glfwExtensionCount)
@@ -146,9 +149,9 @@ bool Vulkan::CheckValidationLayerSupport(std::vector<const char*> validationLaye
 	return layersFullySupported;
 }
 
-void Vulkan::SetupDebugCallback()
+VkDebugReportCallbackEXT Vulkan::SetupDebugCallback(VkInstance instance)
 {
-	if (Vulkan::ValidationLayers.size() <= 0) return; // Validation layers weren't requested.
+	if (Vulkan::ValidationLayers.size() <= 0) return VkDebugReportCallbackEXT(); // Validation layers weren't requested.
 
  	VkDebugReportCallbackCreateInfoEXT createInfo = {};
 	createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
@@ -156,8 +159,10 @@ void Vulkan::SetupDebugCallback()
 	createInfo.pfnCallback = DebugCallback; // Pointer to the callback function.
 	createInfo.pUserData = nullptr; // We can add pointers to our own data here.
 
-	if (Vulkan::CreateDebugReportCallbackEXT(m_Instance, &createInfo, nullptr, &m_DebugCallback) != VK_SUCCESS) // TODO: Fill in custom allocator callback later.
-		throw std::runtime_error("Failed to set up debug callback.");
+	VkDebugReportCallbackEXT debugCallback;
+	VkResult result = Vulkan::CreateDebugReportCallbackEXT(instance, &createInfo, nullptr, &debugCallback); // TODO: Fill in custom allocator callback later.
+	if (result != VK_SUCCESS) throw std::runtime_error("Failed to set up debug callback.");
+	return debugCallback;
 }
 
 // The flag parameter specifies the type of message.
@@ -185,16 +190,16 @@ void Vulkan::DestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCal
 	if (fn != nullptr) fn(instance, callback, pAllocator);
 }
 
-void Vulkan::CreatePhysicalDevice()
+VkPhysicalDevice Vulkan::CreatePhysicalDevice(VkInstance instance)
 {
 	uint32_t deviceCount = 0;
-	vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr); // We first query the number of devices.
+	vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr); // We first query the number of devices.
 	
 	// Verify that we have a GPU that supports Vulkan.
 	if (deviceCount == 0) throw std::runtime_error("Failed to find any GPUs with Vulkan support.");
 		
 	std::vector<VkPhysicalDevice> devices(deviceCount);
-	vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices.data());
+	vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
 	// Use an ordered map to automatically sort candidates by rank.
 	std::multimap<int, VkPhysicalDevice> physicalDeviceCandidates;
@@ -205,11 +210,13 @@ void Vulkan::CreatePhysicalDevice()
 	}
 
 	// Check the best candidate (highest rank), and if it meets requirements.
+	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 	if (physicalDeviceCandidates.rbegin()->first > 0) 
-		m_PhysicalDevice = physicalDeviceCandidates.rbegin()->second; // Get the value.
+		physicalDevice = physicalDeviceCandidates.rbegin()->second; // Get the value.
 
-	// Additional check for the physical device. Stored as m_PhysicalDevice.
-	if (m_PhysicalDevice == VK_NULL_HANDLE) throw std::runtime_error("Failed to find any GPUs that meet standard requirements.");
+	// Additional check for the physical device.
+	if (physicalDevice == VK_NULL_HANDLE) throw std::runtime_error("Failed to find any GPUs that meet standard requirements.");
+	return physicalDevice;
 }
 
 // If there are multiple GPUs and we want to use the 'best' one, we rank them here.
@@ -247,6 +254,7 @@ int Vulkan::RankPhysicalDevice(VkPhysicalDevice device)
 
 // Checks the queue families for our device, then returns the index that supports it.
 // If it doesn't meet requirements, return -1.
+// Extend this to search for specific families, so we have handles for each one.
 int Vulkan::CheckQueueFamilies(VkPhysicalDevice device)
 {
 	// Query for queue families.
@@ -272,10 +280,10 @@ int Vulkan::CheckQueueFamilies(VkPhysicalDevice device)
 	return -1;
 }
 
-void Vulkan::CreateLogicalDevice()
+VkDevice Vulkan::CreateLogicalDevice(VkPhysicalDevice physicalDevice)
 {
 	// We check the queue family again of the chosen device, to get the index.
-	int graphicsFamily = CheckQueueFamilies(m_PhysicalDevice);
+	int graphicsFamily = CheckQueueFamilies(physicalDevice);
 
 	// Setup the queue first.
 	VkDeviceQueueCreateInfo queueCreateInfo = {};
@@ -307,12 +315,24 @@ void Vulkan::CreateLogicalDevice()
 	}
 	else createInfo.enabledLayerCount = 0;
 
-	// Create the actual device now. Store it as m_LogicalDevice.
-	VkResult result = vkCreateDevice(m_PhysicalDevice, &createInfo, nullptr, &m_LogicalDevice); // TODO: Fill in custom allocator callback later.
+	// Create the actual device now.
+	VkDevice logicalDevice;
+	VkResult result = vkCreateDevice(physicalDevice, &createInfo, nullptr, &logicalDevice); // TODO: Fill in custom allocator callback later.
 	if (result != VK_SUCCESS) throw std::runtime_error("Failed to create logical device.");
 
-	// Get the device queue for this.
-	vkGetDeviceQueue(m_LogicalDevice, graphicsFamily, 0, &m_GraphicsQueue);
+	return logicalDevice;
+}
+
+VkQueue Vulkan::GetDeviceQueue(VkPhysicalDevice physicalDevice, VkDevice logicalDevice, int queueIndex)
+{
+	// We check the queue family again of the chosen device, to get the index.
+	int graphicsFamily = CheckQueueFamilies(physicalDevice);
+
+	// Get the device queue reference from the logical device.
+	// Since queues are automatically created with the logical device, we can directly grab it.
+	VkQueue deviceQueue;
+	vkGetDeviceQueue(logicalDevice, graphicsFamily, queueIndex, &deviceQueue);
+	return deviceQueue;
 }
 
 void Vulkan::MainLoop()
