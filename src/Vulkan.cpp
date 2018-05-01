@@ -207,7 +207,7 @@ void Vulkan::InitPhysicalDevice()
 	if (physicalDeviceCandidates.rbegin()->first > 0) 
 		m_PhysicalDevice = physicalDeviceCandidates.rbegin()->second; // Get the value.
 
-	// Final check for the physical device. Stored as m_PhysicalDevice.
+	// Additional check for the physical device. Stored as m_PhysicalDevice.
 	if (m_PhysicalDevice == VK_NULL_HANDLE) throw std::runtime_error("Failed to find any GPUs that meet standard requirements.");
 }
 
@@ -233,24 +233,42 @@ int Vulkan::RankPhysicalDevice(VkPhysicalDevice device)
 	// Maximum possible size of textures affects graphics quality
 	score += deviceProperties.limits.maxImageDimension2D;
 
-	// Application can't function without geometry shaders
+	// Application can't function without geometry shaders, return 0 if not supported.
 	if (!deviceFeatures.geometryShader) return 0;
 
-	// Return weighted score.
+	// We check the queue family to ensure that it can handle the operations we need.
+	int familyIndex = CheckQueueFamilies(device);
+	if (familyIndex < 0) return 0; // return 0 if not supported.
+
+	// Return weighted score, if it meets the general requirements.
 	return score;
 }
 
-// We define the types of actions we want to be able to perform on these graphics cards.
-bool Vulkan::CheckPhysicalDevice(VkPhysicalDevice device)
+// Checks the queue families for our device, then returns the index that supports it.
+// If it doesn't meet requirements, return -1.
+int Vulkan::CheckQueueFamilies(VkPhysicalDevice device)
 {
-	// Get properties and features of this device.
-	VkPhysicalDeviceProperties deviceProperties;
-	VkPhysicalDeviceFeatures deviceFeatures;
-	vkGetPhysicalDeviceProperties(device, &deviceProperties);
-	vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+	// Query for queue families.
+	uint32_t queueFamilyCount = 0;
+	vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+	std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+	vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
 
-	// Determine if it's suitable or not.
-	return deviceFeatures.geometryShader;
+	// We set up a way to check for each property, and by the end choose the ones we need.
+	for (int i = 0; i < (int)queueFamilyCount; i++)
+	{
+		bool graphics = queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT;
+		bool compute = queueFamilies[i].queueFlags & VK_QUEUE_COMPUTE_BIT;
+		bool transfer = queueFamilies[i].queueFlags & VK_QUEUE_TRANSFER_BIT;
+		bool sparse = queueFamilies[i].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT; // Related to sparse memory.
+		bool protect = queueFamilies[i].queueFlags & VK_QUEUE_PROTECTED_BIT; // Related to protected memory.
+
+		// For now, we only need to satisfy the graphics operations queue family.
+		if (graphics) return i;
+		else if (compute | transfer | sparse | protect) continue;
+	}
+
+	return -1;
 }
 
 void Vulkan::MainLoop()

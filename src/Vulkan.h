@@ -44,9 +44,7 @@ private:
 	// Functions for initializing physical devices.
 	void InitPhysicalDevice();
 	int RankPhysicalDevice(VkPhysicalDevice device);
-	bool CheckPhysicalDevice(VkPhysicalDevice device);
-
-
+	int CheckQueueFamilies(VkPhysicalDevice device); // Choose and sort queue families for the device.
 
 
 	void MainLoop();
