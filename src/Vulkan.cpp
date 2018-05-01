@@ -33,7 +33,8 @@ void Vulkan::InitVulkan()
 {
 	CreateInstance(Vulkan::Title.c_str(), "No Engine");
 	SetupDebugCallback(); // If we want the debug callback.
-	InitPhysicalDevice();
+	CreatePhysicalDevice();
+	CreateLogicalDevice();
 }
 
 // We have to define some Vulkan properties and set up the instance.
@@ -184,7 +185,7 @@ void Vulkan::DestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCal
 	if (fn != nullptr) fn(instance, callback, pAllocator);
 }
 
-void Vulkan::InitPhysicalDevice()
+void Vulkan::CreatePhysicalDevice()
 {
 	uint32_t deviceCount = 0;
 	vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr); // We first query the number of devices.
@@ -271,6 +272,49 @@ int Vulkan::CheckQueueFamilies(VkPhysicalDevice device)
 	return -1;
 }
 
+void Vulkan::CreateLogicalDevice()
+{
+	// We check the queue family again of the chosen device, to get the index.
+	int graphicsFamily = CheckQueueFamilies(m_PhysicalDevice);
+
+	// Setup the queue first.
+	VkDeviceQueueCreateInfo queueCreateInfo = {};
+	queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+	queueCreateInfo.queueFamilyIndex = graphicsFamily;
+	queueCreateInfo.queueCount = 1; // Right now, we're just using a single queue family.
+
+	float queuePriority = 1.0f; // Value from 0.0 - 1.0. Required!
+	queueCreateInfo.pQueuePriorities = &queuePriority;
+
+	// Setup the logical device features.
+	VkPhysicalDeviceFeatures deviceFeatures = {}; // We'll add features here later.
+
+	// Fill in the device create info.
+	VkDeviceCreateInfo createInfo = {};
+	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+	createInfo.pQueueCreateInfos = &queueCreateInfo; // Point to the queue create info.
+	createInfo.queueCreateInfoCount = 1; // Right now we only have a single queue create info.
+	createInfo.pEnabledFeatures = &deviceFeatures; // Link the device features we specify above.
+
+	// We'll add in extensions later.
+	createInfo.enabledExtensionCount = 0;
+
+	// If we have validation layers,, we already verified them, so we add them in here now.
+	if ((int)Vulkan::ValidationLayers.size() > 0)
+	{
+		createInfo.enabledLayerCount = static_cast<uint32_t>(Vulkan::ValidationLayers.size());
+		createInfo.ppEnabledLayerNames = Vulkan::ValidationLayers.data();
+	}
+	else createInfo.enabledLayerCount = 0;
+
+	// Create the actual device now. Store it as m_LogicalDevice.
+	VkResult result = vkCreateDevice(m_PhysicalDevice, &createInfo, nullptr, &m_LogicalDevice); // TODO: Fill in custom allocator callback later.
+	if (result != VK_SUCCESS) throw std::runtime_error("Failed to create logical device.");
+
+	// Get the device queue for this.
+	vkGetDeviceQueue(m_LogicalDevice, graphicsFamily, 0, &m_GraphicsQueue);
+}
+
 void Vulkan::MainLoop()
 {
 	while (!glfwWindowShouldClose(m_pWindow)) 
@@ -281,10 +325,13 @@ void Vulkan::MainLoop()
 
 void Vulkan::Cleanup()
 {
+	vkDestroyDevice(m_LogicalDevice, nullptr); // Destroy the device first.
+
 	if ((int)Vulkan::ValidationLayers.size() > 0) 
 		Vulkan::DestroyDebugReportCallbackEXT(m_Instance, m_DebugCallback, nullptr);
 
 	vkDestroyInstance(m_Instance, nullptr); // TODO: Fill in custom allocator callback later.
+
 	glfwDestroyWindow(m_pWindow);
 	glfwTerminate();
 }

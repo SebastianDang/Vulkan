@@ -21,7 +21,8 @@ private:
 	VkInstance m_Instance;
 	VkDebugReportCallbackEXT m_DebugCallback;
 	VkPhysicalDevice m_PhysicalDevice = VK_NULL_HANDLE;
-
+	VkDevice m_LogicalDevice;
+	VkQueue m_GraphicsQueue;
 
 
 	void InitWindow(int width, int height, const char *title);
@@ -42,10 +43,12 @@ private:
 		const VkAllocationCallbacks* pAllocator);
 
 	// Functions for initializing physical devices.
-	void InitPhysicalDevice();
+	void CreatePhysicalDevice();
 	int RankPhysicalDevice(VkPhysicalDevice device);
 	int CheckQueueFamilies(VkPhysicalDevice device); // Choose and sort queue families for the device.
 
+	// Functions for creating logical devices.
+	void CreateLogicalDevice();
 
 	void MainLoop();
 	void Cleanup();
