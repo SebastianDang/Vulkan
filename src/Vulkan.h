@@ -20,9 +20,14 @@ private:
 	GLFWwindow * m_pWindow = nullptr;
 	VkInstance m_Instance;
 	VkDebugReportCallbackEXT m_DebugCallback;
+	VkPhysicalDevice m_PhysicalDevice = VK_NULL_HANDLE;
+
+
 
 	void InitWindow(int width, int height, const char *title);
 	void InitVulkan();
+
+	// Functions for setting up the instance and verifying extensions and layers.
 	void CreateInstance(const char *appName, const char *engineName);
 	bool CheckGLFWExtensionSupport(const char ** glfwExtensions, int glfwExtensionCount);
 	bool CheckValidationLayerSupport(std::vector<const char*> validationLayers);
@@ -35,6 +40,12 @@ private:
 		const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback);
 	static void DestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackEXT callback, 
 		const VkAllocationCallbacks* pAllocator);
+
+	// Functions for initializing physical devices.
+	void InitPhysicalDevice();
+	int RankPhysicalDevice(VkPhysicalDevice device);
+	bool CheckPhysicalDevice(VkPhysicalDevice device);
+
 
 
 

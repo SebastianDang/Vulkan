@@ -6,7 +6,9 @@ int Vulkan::Width = 800;
 int Vulkan::Height = 600;
 std::vector<const char*> Vulkan::ValidationLayers = { "VK_LAYER_LUNARG_standard_validation" };
 
-
+// Initialize everything here.
+// Once it's done, we run the main rendering loop.
+// When the program closes, we properly close and delete anything initialized.
 void Vulkan::Run()
 {
 	InitWindow(Vulkan::Width, Vulkan::Height, Vulkan::Title.c_str());
@@ -15,6 +17,8 @@ void Vulkan::Run()
 	Cleanup();
 }
 
+// Create a new glfw window. We need to specify glfw for Vulkan instead of OpenGL.
+// We reference this window with a member variable.
 void Vulkan::InitWindow(int width, int height, const char *title)
 {
 	glfwInit();
@@ -23,12 +27,18 @@ void Vulkan::InitWindow(int width, int height, const char *title)
 	m_pWindow = glfwCreateWindow(width, height, title, nullptr, nullptr);
 }
 
+// Create an instance of Vulkan. 
+// Once that's created, we grab any additional extensions and setup callbacks here.
 void Vulkan::InitVulkan()
 {
 	CreateInstance(Vulkan::Title.c_str(), "No Engine");
-	SetupDebugCallback();
+	SetupDebugCallback(); // If we want the debug callback.
+	InitPhysicalDevice();
 }
 
+// We have to define some Vulkan properties and set up the instance.
+// Any validation layers and extensions need to be added, then
+// verified here.
 void Vulkan::CreateInstance(const char *appName, const char *engineName)
 {
 	// Define the application layer. 
@@ -154,6 +164,7 @@ void Vulkan::SetupDebugCallback()
 VKAPI_ATTR VkBool32 VKAPI_CALL Vulkan::DebugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objType, 
 	uint64_t obj, size_t location, int32_t code, const char * layerPrefix, const char * msg, void * userData)
 {
+	// TODO: Add more stuff for debugging here.
 	std::cerr << "DebugCallback: " << flags << objType << obj << location << code << layerPrefix << msg << userData << std::endl;
 	return VK_FALSE;
 }
@@ -171,6 +182,75 @@ void Vulkan::DestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCal
 {
 	auto fn = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT");
 	if (fn != nullptr) fn(instance, callback, pAllocator);
+}
+
+void Vulkan::InitPhysicalDevice()
+{
+	uint32_t deviceCount = 0;
+	vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr); // We first query the number of devices.
+	
+	// Verify that we have a GPU that supports Vulkan.
+	if (deviceCount == 0) throw std::runtime_error("Failed to find any GPUs with Vulkan support.");
+		
+	std::vector<VkPhysicalDevice> devices(deviceCount);
+	vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices.data());
+
+	// Use an ordered map to automatically sort candidates by rank.
+	std::multimap<int, VkPhysicalDevice> physicalDeviceCandidates;
+	for (int i = 0; i < (int)deviceCount; i++)
+	{
+		int rank = RankPhysicalDevice(devices[i]);
+		physicalDeviceCandidates.insert(std::make_pair(rank, devices[i]));
+	}
+
+	// Check the best candidate (highest rank), and if it meets requirements.
+	if (physicalDeviceCandidates.rbegin()->first > 0) 
+		m_PhysicalDevice = physicalDeviceCandidates.rbegin()->second; // Get the value.
+
+	// Final check for the physical device. Stored as m_PhysicalDevice.
+	if (m_PhysicalDevice == VK_NULL_HANDLE) throw std::runtime_error("Failed to find any GPUs that meet standard requirements.");
+}
+
+// If there are multiple GPUs and we want to use the 'best' one, we rank them here.
+// This can also serve as a check for the physical device.
+// If it doesn't meet any of these requirements of base requirements, returns 0.
+int Vulkan::RankPhysicalDevice(VkPhysicalDevice device)
+{
+	int score = 0; // If it's not suitable, we just return 0.
+
+	// Get properties and features of this device.
+	VkPhysicalDeviceProperties deviceProperties;
+	VkPhysicalDeviceFeatures deviceFeatures;
+	vkGetPhysicalDeviceProperties(device, &deviceProperties);
+	vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+	// Discrete GPUs have a significant performance advantage
+	if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+	{
+		score += 1000;
+	}
+
+	// Maximum possible size of textures affects graphics quality
+	score += deviceProperties.limits.maxImageDimension2D;
+
+	// Application can't function without geometry shaders
+	if (!deviceFeatures.geometryShader) return 0;
+
+	// Return weighted score.
+	return score;
+}
+
+// We define the types of actions we want to be able to perform on these graphics cards.
+bool Vulkan::CheckPhysicalDevice(VkPhysicalDevice device)
+{
+	// Get properties and features of this device.
+	VkPhysicalDeviceProperties deviceProperties;
+	VkPhysicalDeviceFeatures deviceFeatures;
+	vkGetPhysicalDeviceProperties(device, &deviceProperties);
+	vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+	// Determine if it's suitable or not.
+	return deviceFeatures.geometryShader;
 }
 
 void Vulkan::MainLoop()
